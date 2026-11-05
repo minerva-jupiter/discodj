@@ -6,7 +6,10 @@ import random
 from collections import defaultdict, deque
 
 YDL_OPTIONS = {'format': 'bestaudio'}
-FFMPEG_OPTIONS = {'options': '-vn'}
+FFMPEG_OPTIONS = {
+    'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
+    'options': '-vn'
+}
 
 class DiscoDJ:
     def __init__(self, client):
@@ -187,11 +190,30 @@ class DiscoDJ:
             self.prefetch_tasks[guild_id] = asyncio.create_task(self._prefetch_next(guild_id, track))
 
         def after_playing(e):
-            if e: print(f'[Player error] {e}')
-            asyncio.run_coroutine_threadsafe(self.play_next(guild_id, vc, channel), self.client.loop)
+            if e:
+                print(f'[Player error] Playback stopped with error: {e}')
+            
+            # Use the client's event loop to schedule the next track
+            if self.client.is_closed():
+                return
+
+            future = asyncio.run_coroutine_threadsafe(
+                self.play_next(guild_id, vc, channel), 
+                self.client.loop
+            )
+            try:
+                future.result(timeout=1) # Just check if scheduling succeeded
+            except Exception:
+                pass
 
         try:
-            vc.play(discord.FFmpegPCMAudio(track['url'], **FFMPEG_OPTIONS), after=after_playing)
+            # Re-verify voice client state before playing
+            if not vc or not vc.is_connected():
+                print(f'[Play error] Voice client disconnected before starting {track["title"]}')
+                return
+
+            source = discord.FFmpegPCMAudio(track['url'], **FFMPEG_OPTIONS)
+            vc.play(source, after=after_playing)
             print(f'[Playing] {track["title"]}')
         except Exception as e:
             print(f'[Play error] {e}')
